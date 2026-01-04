@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Radar AEMET (Murcia) - Calibración bounds</title>
+  <title>Radar AEMET (Murcia) - Calibración bounds (4 puntos)</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -16,7 +16,7 @@
       border:1px solid rgba(255,255,255,.12);
       border-radius:12px; padding:10px 12px;
       font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      font-size:13px; display:grid; gap:8px; min-width:280px; max-width:420px;
+      font-size:13px; display:grid; gap:8px; min-width:300px; max-width:460px;
     }
     .row{ display:flex; gap:8px; align-items:center; justify-content:space-between; }
     button{
@@ -33,17 +33,14 @@
   <div id="map"></div>
 
   <div class="panel">
-    <b style="color:lime">CALIBRACIÓN ✅</b>
+    <b style="color:lime">CALIBRACIÓN 4 PUNTOS ✅</b>
     <div class="row">
       <span id="status" class="muted">Cargando…</span>
       <button id="refresh">Actualizar</button>
     </div>
-
     <div class="tiny">
-      Arrastra los marcadores <b>SW</b> y <b>NE</b> para mover/estirar el radar.<br/>
-      Copia estos bounds:
+      Arrastra <b>NW/NE/SE/SW</b>. Copia los bounds:
     </div>
-
     <div class="tiny" id="debug">
       SW: <code>—</code><br/>
       NE: <code>—</code>
@@ -55,9 +52,13 @@
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
 
-    // Bounds iniciales (punto de partida)
-    let SW = [35.50, -3.95];
-    let NE = [40.40,  1.60];
+    // Punto de partida (puedes dejarlos como los que ya te funcionaban)
+    let corners = {
+      NW: [40.40, -3.95],
+      NE: [40.40,  1.60],
+      SE: [35.50,  1.60],
+      SW: [35.50, -3.95],
+    };
 
     const map = L.map("map").setView([37.9, -1.2], 8);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -66,19 +67,30 @@
 
     let overlay = null;
     let rect = null;
-    let mSW = null;
-    let mNE = null;
+    const markers = {};
 
     function setStatus(msg){ document.getElementById("status").textContent = msg; }
 
+    function getBoundsFromCorners() {
+      const lats = Object.values(corners).map(c => c[0]);
+      const lons = Object.values(corners).map(c => c[1]);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+      return { SW: [minLat, minLon], NE: [maxLat, maxLon] };
+    }
+
     function updateDebug() {
+      const { SW, NE } = getBoundsFromCorners();
       document.getElementById("debug").innerHTML =
         `SW: <code>[${SW[0].toFixed(5)}, ${SW[1].toFixed(5)}]</code><br/>` +
         `NE: <code>[${NE[0].toFixed(5)}, ${NE[1].toFixed(5)}]</code>`;
-      console.log("BOUNDS:", { SW, NE });
+      console.log("✅ BOUNDS PARA COPIAR:", { SW, NE, corners });
     }
 
     function applyBounds() {
+      const { SW, NE } = getBoundsFromCorners();
       const bounds = L.latLngBounds(SW, NE);
       if (overlay) overlay.setBounds(bounds);
       if (rect) rect.setBounds(bounds);
@@ -86,39 +98,27 @@
     }
 
     function ensureHandles() {
+      // Rectángulo visual de bounds
+      const { SW, NE } = getBoundsFromCorners();
       const bounds = L.latLngBounds(SW, NE);
+      if (!rect) rect = L.rectangle(bounds, { weight: 1, color: "#00e5ff", fillOpacity: 0.05 }).addTo(map);
 
-      if (!rect) {
-        rect = L.rectangle(bounds, { weight: 1, color: "#00e5ff", fillOpacity: 0.05 }).addTo(map);
+      // Crea 4 marcadores
+      for (const key of ["NW","NE","SE","SW"]) {
+        if (!markers[key]) {
+          markers[key] = L.marker(corners[key], { draggable: true })
+            .addTo(map)
+            .bindTooltip(key, { permanent: true, direction: "right" });
+
+          markers[key].on("drag", (e) => {
+            const ll = e.target.getLatLng();
+            corners[key] = [ll.lat, ll.lng];
+            applyBounds();
+          });
+        } else {
+          markers[key].setLatLng(corners[key]);
+        }
       }
-
-      if (!mSW) {
-        mSW = L.marker(SW, { draggable: true }).addTo(map).bindTooltip("SW", {permanent:true, direction:"right"});
-        mSW.on("drag", (e) => {
-          const ll = e.target.getLatLng();
-          SW = [ll.lat, ll.lng];
-          // evita invertir bounds
-          if (SW[0] > NE[0]) SW[0] = NE[0] - 0.01;
-          if (SW[1] > NE[1]) SW[1] = NE[1] - 0.01;
-          applyBounds();
-        });
-      } else {
-        mSW.setLatLng(SW);
-      }
-
-      if (!mNE) {
-        mNE = L.marker(NE, { draggable: true }).addTo(map).bindTooltip("NE", {permanent:true, direction:"right"});
-        mNE.on("drag", (e) => {
-          const ll = e.target.getLatLng();
-          NE = [ll.lat, ll.lng];
-          if (NE[0] < SW[0]) NE[0] = SW[0] + 0.01;
-          if (NE[1] < SW[1]) NE[1] = SW[1] + 0.01;
-          applyBounds();
-        });
-      } else {
-        mNE.setLatLng(NE);
-      }
-
       applyBounds();
     }
 
@@ -131,11 +131,7 @@
 
         let j;
         try { j = JSON.parse(txt); }
-        catch {
-          setStatus(`HTTP ${r.status} (no JSON)`);
-          console.log("RESPUESTA CRUDA:", txt);
-          return;
-        }
+        catch { setStatus(`HTTP ${r.status} (no JSON)`); console.log("CRUDO:", txt); return; }
 
         if (j.estado !== 200 || !j.datos) {
           setStatus(`Error AEMET: ${j.estado} ${j.descripcion || ""}`.trim());
@@ -143,11 +139,13 @@
         }
 
         const imgUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
+        const { SW, NE } = getBoundsFromCorners();
+        const bounds = L.latLngBounds(SW, NE);
 
         if (!overlay) {
-          overlay = L.imageOverlay(imgUrl, L.latLngBounds(SW, NE), { opacity: 0.9 }).addTo(map);
+          overlay = L.imageOverlay(imgUrl, bounds, { opacity: 0.9 }).addTo(map);
           ensureHandles();
-          setStatus("OK (calibrando)");
+          setStatus("OK (calibrando 4 puntos)");
         } else {
           overlay.setUrl(imgUrl);
           setStatus("OK (actualizado)");
