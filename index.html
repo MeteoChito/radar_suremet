@@ -8,6 +8,9 @@
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
+  <!-- Leaflet Toolbar (DEPENDENCIA OBLIGATORIA) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.css"/>
+
   <!-- DistortableImage CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.css"/>
 
@@ -73,189 +76,53 @@
       <button id="resetCorners">Reset ajuste</button>
     </div>
 
-    <div class="muted" id="hint">
-      Ajuste fino: activa <code>Calibrar</code>, arrastra y distorsiona hasta encajar costa/límites.
-      Se guarda automáticamente en tu navegador.
+    <div class="muted">
+      Activa <code>Calibrar</code>, ajusta el radar una vez y queda guardado.
     </div>
   </div>
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <!-- Leaflet Toolbar JS (DEPENDENCIA) -->
+  <script src="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.js"></script>
+
   <!-- DistortableImage JS -->
   <script src="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.js"></script>
 
   <script>
-    // === CONFIG ===
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
     const STORAGE_KEY = `radarCorners_${RADAR}`;
 
-    // Esquinas iniciales (aprox). Luego las calibras y se guardan.
     function defaultCorners() {
       return [
-        L.latLng(40.45, -3.90), // NW
-        L.latLng(40.45,  1.52), // NE
-        L.latLng(35.55,  1.52), // SE
-        L.latLng(35.55, -3.90)  // SW
+        L.latLng(40.45, -3.90),
+        L.latLng(40.45,  1.52),
+        L.latLng(35.55,  1.52),
+        L.latLng(35.55, -3.90)
       ];
     }
 
     function loadCorners() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return defaultCorners();
-        const arr = JSON.parse(raw);
-        if (!Array.isArray(arr) || arr.length !== 4) return defaultCorners();
-        return arr.map(p => L.latLng(p.lat, p.lng));
-      } catch {
-        return defaultCorners();
-      }
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaultCorners();
+      return JSON.parse(raw).map(p => L.latLng(p.lat, p.lng));
     }
 
-    function saveCorners(corners) {
-      const arr = corners.map(c => ({ lat: c.lat, lng: c.lng }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+    function saveCorners(c) {
+      localStorage.setItem(STORAGE_KEY,
+        JSON.stringify(c.map(x => ({ lat: x.lat, lng: x.lng })))
+      );
     }
 
-    // === MAPA BASE ===
-    const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
+    const map = L.map("map").setView([37.9, -1.2], 8);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap'
+      maxZoom: 19
     }).addTo(map);
 
-    // === UI ===
-    function setStatus(msg) {
-      document.getElementById("status").textContent = msg;
-    }
-
-    let calibrating = false;
-    function setCalibState(on) {
-      calibrating = on;
-      const el = document.getElementById("calibState");
-      el.textContent = `Calibración: ${on ? "ON" : "OFF"}`;
-      el.classList.toggle("on", on);
-      el.classList.toggle("off", !on);
-
-      // Activamos/desactivamos modo edición
-      if (radarOverlay) {
-        if (on) radarOverlay.editing.enable();
-        else radarOverlay.editing.disable();
-      }
-    }
-
-    // === FILTRO (tu mismo filtro) ===
-    function makeFilteredDataUrl(img) {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0);
-
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d = imgData.data;
-
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-
-        const isDark = (r < 35 && g < 35 && b < 35);
-        const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
-        const isAlmostWhite = (r > 245 && g > 245 && b > 245);
-
-        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
-      }
-
-      ctx.putImageData(imgData, 0, 0);
-      return canvas.toDataURL("image/png");
-    }
-
-    async function fetchImageToDataUrl(url) {
-      return await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-
-        img.onload = () => {
-          try { resolve(makeFilteredDataUrl(img)); }
-          catch (e) { reject(e); }
-        };
-        img.onerror = reject;
-        img.src = url;
-      });
-    }
-
-    // === OVERLAY RADAR (WARP) ===
     let radarOverlay = null;
-
-    async function cargarRadar() {
-      setStatus("Cargando radar…");
-      try {
-        const r = await fetch(`${PROXY}/radar?radar=${encodeURIComponent(RADAR)}`);
-        const j = await r.json();
-
-        if (j.estado !== 200 || !j.datos) {
-          setStatus(`Error AEMET: ${j.estado} ${j.descripcion || ""}`.trim());
-          return;
-        }
-
-        const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
-
-        let overlayUrl;
-        try {
-          overlayUrl = await fetchImageToDataUrl(rawUrl);
-          setStatus("OK (filtrado)");
-        } catch {
-          overlayUrl = rawUrl;
-          setStatus("OK (sin filtro: CORS)");
-        }
-
-        if (!radarOverlay) {
-          radarOverlay = L.distortableImageOverlay(overlayUrl, {
-            corners: loadCorners(),
-            opacity: 1.0,
-            // Si quieres que “no moleste” al clicar el mapa cuando no calibras:
-            interactive: true
-          }).addTo(map);
-
-          // Guardamos esquinas siempre que el usuario ajuste
-          radarOverlay.on("update", () => {
-            saveCorners(radarOverlay.getCorners());
-          });
-
-          // Por defecto, edición OFF
-          radarOverlay.editing.disable();
-        } else {
-          radarOverlay.setUrl(overlayUrl);
-        }
-
-      } catch (e) {
-        setStatus("Error de conexión");
-      }
-    }
-
-    // === BOTONES ===
-    document.getElementById("refresh").addEventListener("click", cargarRadar);
-
-    document.getElementById("toggleCalib").addEventListener("click", () => {
-      setCalibState(!calibrating);
-    });
-
-    document.getElementById("resetCorners").addEventListener("click", () => {
-      localStorage.removeItem(STORAGE_KEY);
-      if (radarOverlay) {
-        radarOverlay.setCorners(defaultCorners());
-        saveCorners(radarOverlay.getCorners());
-      }
-      setStatus("Ajuste reseteado");
-    });
-
-    // Primera carga
-    cargarRadar();
-    setCalibState(false);
-  </script>
-</body>
-</html>
+    let c
 
 
