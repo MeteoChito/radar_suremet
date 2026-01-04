@@ -29,7 +29,8 @@
       font-size: 13px;
       display: grid;
       gap: 8px;
-      min-width: 240px;
+      min-width: 260px;
+      max-width: 360px;
     }
     .panel b { font-size: 14px; }
     .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -40,9 +41,11 @@
       border-radius: 10px;
       padding: 8px 10px;
       cursor: pointer;
+      white-space: nowrap;
     }
     button:hover { background: #1b2633; }
     .muted { color: #9fb0c0; }
+    code { color: #cfe7ff; }
   </style>
 </head>
 <body>
@@ -55,7 +58,7 @@
       <button id="refresh">Actualizar</button>
     </div>
     <div class="muted" id="hint">
-      Si el overlay no encaja perfecto, ajustamos los <code>bounds</code>.
+      Overlay: <code>bounds</code> ajustados + filtro para dejar solo precipitación.
     </div>
   </div>
 
@@ -67,11 +70,11 @@
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
 
-    // Bounds aproximados para el SE peninsular (Murcia/Almería/Alicante).
-    // Ajustaremos si quieres que encaje exacto como la web de ejemplo.
+    // ✅ Bounds más anchos (ajuste inicial recomendado)
+    // Si aún no encaja perfecto, ajustamos estos 4 números.
     const radarBounds = L.latLngBounds(
-      [36.0, -3.5],  // SW (lat, lon)
-      [39.5, -0.5]   // NE (lat, lon)
+      [35.7, -4.2],  // SW (lat, lon)
+      [40.0,  0.4]   // NE (lat, lon)
     );
 
     // === MAPA BASE ===
@@ -89,6 +92,57 @@
       document.getElementById("status").textContent = msg;
     }
 
+    // ✅ Filtro para hacer transparente el fondo negro/gris y dejar solo ecos
+    function makeFilteredDataUrl(img) {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+
+        // Fondo del radar: negro/casi negro
+        const isDark = (r < 35 && g < 35 && b < 35);
+
+        // Grises (bordes/zonas fuera del círculo): tonos parecidos y no muy claros
+        const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
+
+        // También eliminamos casi-blancos (a veces hay cajas claras)
+        const isAlmostWhite = (r > 245 && g > 245 && b > 245);
+
+        if (isDark || isGray || isAlmostWhite) {
+          d[i + 3] = 0; // transparente
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+      return canvas.toDataURL("image/png");
+    }
+
+    async function fetchImageToDataUrl(url) {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous"; // necesario para leer píxeles (si CORS lo permite)
+
+        img.onload = () => {
+          try {
+            resolve(makeFilteredDataUrl(img));
+          } catch (e) {
+            reject(e);
+          }
+        };
+        img.onerror = reject;
+
+        img.src = url;
+      });
+    }
+
     async function cargarRadar() {
       setStatus("Cargando radar…");
       try {
@@ -100,17 +154,28 @@
           return;
         }
 
-        // Anti-caché para que cambie la imagen
-        const imgUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
+        // Anti-caché
+        const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
 
-        if (!radarOverlay) {
-          radarOverlay = L.imageOverlay(imgUrl, radarBounds, { opacity: 0.65 });
-          radarOverlay.addTo(map);
-        } else {
-          radarOverlay.setUrl(imgUrl);
+        // Intentamos filtrar la imagen para dejar solo precipitación
+        let overlayUrl = null;
+        try {
+          overlayUrl = await fetchImageToDataUrl(rawUrl);
+        } catch (e) {
+          // Si falla por CORS, avisamos claramente
+          setStatus("OK (sin filtro: CORS)");
+          overlayUrl = rawUrl; // fallback sin filtro
         }
 
-        setStatus("OK");
+        if (!radarOverlay) {
+          radarOverlay = L.imageOverlay(overlayUrl, radarBounds, { opacity: 1.0 });
+          radarOverlay.addTo(map);
+        } else {
+          radarOverlay.setUrl(overlayUrl);
+        }
+
+        // Si llegó aquí sin fallback:
+        if (overlayUrl !== rawUrl) setStatus("OK (filtrado)");
       } catch (e) {
         setStatus("Error de conexión");
       }
