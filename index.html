@@ -1,11 +1,44 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <title>Radar Suremet</title>
+  <meta charset="UTF-8" />
+  <title>Radar AEMET – Murcia</title>
+  <style>
+    body { font-family: system-ui, sans-serif; text-align: center; }
+    img { max-width: 100%; height: auto; }
+  </style>
 </head>
 <body>
-  <h1>Radar Suremet</h1>
-  <p>Oye, pero respetando las formas 🚀</p>
+
+<h1>Radar AEMET – Murcia</h1>
+<p id="status">Cargando radar…</p>
+<img id="radar" alt="Radar AEMET Murcia" />
+
+<script>
+const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
+
+async function cargarRadar() {
+  try {
+    const r = await fetch(`${PROXY}/radar?radar=mu`);
+    const j = await r.json();
+
+    if (j.estado !== 200) {
+      document.getElementById("status").textContent =
+        "Error AEMET: " + (j.descripcion || j.estado);
+      return;
+    }
+
+    document.getElementById("radar").src =
+      j.datos + "?t=" + Date.now(); // evita caché
+    document.getElementById("status").textContent = "Actualizado";
+  } catch (e) {
+    document.getElementById("status").textContent =
+      "Error de conexión";
+  }
+}
+
+cargarRadar();
+</script>
+
 </body>
 </html>
