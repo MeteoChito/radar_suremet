@@ -6,10 +6,10 @@
   <title>Radar AEMET (Murcia) - Leaflet</title>
 
   <!-- Leaflet CSS -->
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- ✅ DistortableImage CSS (para mover/estirar el overlay a mano) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage@0.19.2/dist/leaflet.distortableimage.css" />
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -30,7 +30,7 @@
       display: grid;
       gap: 8px;
       min-width: 260px;
-      max-width: 360px;
+      max-width: 420px;
     }
     .panel b { font-size: 14px; }
     .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -46,7 +46,7 @@
     button:hover { background: #1b2633; }
     .muted { color: #9fb0c0; }
     code { color: #cfe7ff; }
-    .tiny { font-size: 12px; color: #9fb0c0; }
+    .tiny { font-size: 12px; color: #9fb0c0; line-height: 1.35; }
   </style>
 </head>
 <body>
@@ -59,35 +59,32 @@
       <button id="refresh">Actualizar</button>
     </div>
     <div class="muted" id="hint">
-      Overlay: <code>bounds</code> ajustados + filtro para dejar solo precipitación.
+      Modo calibración: mueve/estira el radar y copia los <code>bounds</code>.
     </div>
+
     <div class="tiny" id="debug">
-      Offset: dLat=<code>0.000</code> dLon=<code>0.000</code> · (Flechas para mover, Shift+Flechas más rápido)
+      Bounds SW: <code>—</code><br/>
+      Bounds NE: <code>—</code><br/>
+      Tip: clic en el radar → arrastra / estira esquinas. (Luego copia los valores)
     </div>
   </div>
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <!-- ✅ DistortableImage JS -->
+  <script src="https://unpkg.com/leaflet-distortableimage@0.19.2/dist/leaflet.distortableimage.js"></script>
+
   <script>
     // === CONFIG ===
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
 
-    // ✅ Bounds base (sin offset). NO los toques al ajustar, ajusta dLat/dLon con flechas.
-    const BASE_SW = [35.50, -3.95]; // [lat, lon]
-    const BASE_NE = [40.40,  1.60]; // [lat, lon]
-
-    // Offset inicial (se cambia con flechas)
-    let dLat = 0.000; // + sube, - baja
-    let dLon = 0.000; // + derecha, - izquierda
-
-    function currentBounds() {
-      return L.latLngBounds(
-        [BASE_SW[0] + dLat, BASE_SW[1] + dLon],
-        [BASE_NE[0] + dLat, BASE_NE[1] + dLon]
-      );
-    }
+    // ✅ Bounds iniciales (sirven de punto de partida)
+    const START_BOUNDS = L.latLngBounds(
+      [35.50, -3.95], // SW
+      [40.40,  1.60]  // NE
+    );
 
     // === MAPA BASE ===
     const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
@@ -97,50 +94,29 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // === OVERLAY RADAR ===
+    // === OVERLAY RADAR (distortable) ===
     let radarOverlay = null;
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg;
     }
 
-    function updateDebug() {
-      const el = document.getElementById("debug");
-      el.innerHTML =
-        `Offset: dLat=<code>${dLat.toFixed(3)}</code> dLon=<code>${dLon.toFixed(3)}</code> · (Flechas para mover, Shift+Flechas más rápido)`;
-      console.log("Bounds:", {
-        SW: [BASE_SW[0] + dLat, BASE_SW[1] + dLon],
-        NE: [BASE_NE[0] + dLat, BASE_NE[1] + dLon]
-      });
+    function setBoundsDebug(bounds) {
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+
+      const swTxt = `[${sw.lat.toFixed(5)}, ${sw.lng.toFixed(5)}]`;
+      const neTxt = `[${ne.lat.toFixed(5)}, ${ne.lng.toFixed(5)}]`;
+
+      document.getElementById("debug").innerHTML =
+        `Bounds SW: <code>${swTxt}</code><br/>` +
+        `Bounds NE: <code>${neTxt}</code><br/>` +
+        `Tip: ajusta a mano y copia estos dos pares para tu <code>L.latLngBounds(SW, NE)</code>.`;
+
+      console.log("✅ BOUNDS FINALES (cópialos):");
+      console.log("SW:", swTxt);
+      console.log("NE:", neTxt);
     }
-
-    function applyBoundsIfReady() {
-      if (!radarOverlay) return;
-      radarOverlay.setBounds(currentBounds());
-      updateDebug();
-    }
-
-    // ✅ Controles con flechas:
-    // ArrowUp/Down: mueve al norte/sur
-    // ArrowLeft/Right: mueve oeste/este
-    // Shift: paso grande
-    window.addEventListener("keydown", (e) => {
-      // Evita que la página haga scroll con las flechas
-      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
-        e.preventDefault();
-      } else {
-        return;
-      }
-
-      const step = e.shiftKey ? 0.05 : 0.01;
-
-      if (e.key === "ArrowUp") dLat += step;       // arriba
-      if (e.key === "ArrowDown") dLat -= step;     // abajo
-      if (e.key === "ArrowRight") dLon += step;    // derecha
-      if (e.key === "ArrowLeft") dLon -= step;     // izquierda
-
-      applyBoundsIfReady();
-    }, { passive: false });
 
     // ✅ Filtro para hacer transparente el fondo negro/gris y dejar solo ecos
     function makeFilteredDataUrl(img) {
@@ -161,9 +137,7 @@
         const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
         const isAlmostWhite = (r > 245 && g > 245 && b > 245);
 
-        if (isDark || isGray || isAlmostWhite) {
-          d[i + 3] = 0;
-        }
+        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
       }
 
       ctx.putImageData(imgData, 0, 0);
@@ -174,13 +148,11 @@
       return await new Promise((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = "anonymous";
-
         img.onload = () => {
           try { resolve(makeFilteredDataUrl(img)); }
           catch (e) { reject(e); }
         };
         img.onerror = reject;
-
         img.src = url;
       });
     }
@@ -202,21 +174,35 @@
         try {
           overlayUrl = await fetchImageToDataUrl(rawUrl);
         } catch (e) {
-          setStatus("OK (sin filtro: CORS)");
+          // Si falla por CORS, usamos la imagen tal cual
           overlayUrl = rawUrl;
+          setStatus("OK (sin filtro: CORS)");
         }
 
         if (!radarOverlay) {
-          radarOverlay = L.imageOverlay(overlayUrl, currentBounds(), { opacity: 1.0 });
-          radarOverlay.addTo(map);
-          updateDebug(); // muestra offsets al crear
-        } else {
-          radarOverlay.setUrl(overlayUrl);
-          radarOverlay.setBounds(currentBounds()); // reaplica bounds actuales
-          updateDebug();
-        }
+          // ✅ Creamos el overlay "editable"
+          radarOverlay = L.distortableImageOverlay(overlayUrl, {
+            selected: true,
+            suppressToolbar: false,  // muestra toolbar
+            cornerIcon: true
+          }).addTo(map);
 
-        if (overlayUrl !== rawUrl) setStatus("OK (filtrado)");
+          // aplicamos bounds iniciales
+          radarOverlay.setBounds(START_BOUNDS);
+          setBoundsDebug(START_BOUNDS);
+
+          // ✅ cada vez que lo mueves/estiras, te damos los bounds
+          radarOverlay.on("update", () => {
+            const b = radarOverlay.getBounds();
+            setBoundsDebug(b);
+          });
+
+          setStatus("OK (calibrando)");
+        } else {
+          // refrescar la imagen manteniendo la posición/forma
+          radarOverlay.setUrl(overlayUrl);
+          setStatus("OK (actualizado)");
+        }
       } catch (e) {
         setStatus("Error de conexión");
       }
