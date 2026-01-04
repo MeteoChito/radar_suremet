@@ -6,13 +6,10 @@
   <title>Radar AEMET (Murcia) - Leaflet</title>
 
   <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
-  <!-- Leaflet Toolbar (dependencia de DistortableImage) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.css" />
-
-  <!-- DistortableImage CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.css" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -32,11 +29,11 @@
       font-size: 13px;
       display: grid;
       gap: 8px;
-      min-width: 300px;
-      max-width: 420px;
+      min-width: 260px;
+      max-width: 360px;
     }
     .panel b { font-size: 14px; }
-    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
     button {
       background: #17202b;
       color: #e6edf3;
@@ -49,114 +46,36 @@
     button:hover { background: #1b2633; }
     .muted { color: #9fb0c0; }
     code { color: #cfe7ff; }
-
-    .pill {
-      padding: 4px 8px;
-      border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 999px;
-      font-size: 12px;
-    }
-    .pill.on { color: #7CFF8A; border-color: rgba(124,255,138,0.35); }
-    .pill.off { color: #ffcc66; border-color: rgba(255,204,102,0.35); }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
   <div class="panel">
-    <b style="color:lime">LEAFLET + WARP ✅</b>
-
+    <b style="color:lime">LEAFLET ACTIVO ✅</b>
     <div class="row">
       <span id="status" class="muted">Cargando…</span>
-      <span id="calibState" class="pill off">Calibración: OFF</span>
-    </div>
-
-    <div class="row">
       <button id="refresh">Actualizar</button>
-      <button id="toggleCalib">Calibrar (ON/OFF)</button>
-      <button id="resetCorners">Reset ajuste</button>
     </div>
-
     <div class="muted" id="hint">
-      Activa <code>Calibrar</code> para arrastrar/rotar/distorsionar. Se guarda automáticamente.
+      Overlay: <code>bounds</code> ajustados + filtro para dejar solo precipitación.
     </div>
   </div>
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Leaflet Toolbar (dependencia) -->
-  <script src="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.js"></script>
-
-  <!-- DistortableImage -->
-  <script src="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.js"></script>
-
   <script>
     // === CONFIG ===
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
-    const STORAGE_KEY = `radarCorners_${RADAR}`;
 
-    // ---- Helpers para evitar que el warp se "vuelva loco" ----
-    function normalizeCorners(corners) {
-      // Devuelve en orden: [topLeft, topRight, bottomRight, bottomLeft]
-      const pts = corners.map(c => L.latLng(c.lat, c.lng));
-      const sortedByLat = [...pts].sort((a, b) => b.lat - a.lat); // mayor lat = arriba
-
-      const top = sortedByLat.slice(0, 2).sort((a, b) => a.lng - b.lng);       // izq -> der
-      const bottom = sortedByLat.slice(2, 4).sort((a, b) => a.lng - b.lng);    // izq -> der
-
-      const topLeft = top[0];
-      const topRight = top[1];
-      const bottomLeft = bottom[0];
-      const bottomRight = bottom[1];
-
-      return [topLeft, topRight, bottomRight, bottomLeft];
-    }
-
-    function cornersLookCrazy(corners) {
-      // Radar regional no debería ocupar medio planeta.
-      const lats = corners.map(c => c.lat);
-      const lngs = corners.map(c => c.lng);
-      const spanLat = Math.max(...lats) - Math.min(...lats);
-      const spanLng = Math.max(...lngs) - Math.min(...lngs);
-      return spanLat > 12 || spanLng > 18;
-    }
-
-    function defaultCorners() {
-      // Da igual el orden: normalizeCorners lo arregla
-      const raw = [
-        L.latLng(40.45, -3.90),
-        L.latLng(40.45,  1.52),
-        L.latLng(35.55,  1.52),
-        L.latLng(35.55, -3.90)
-      ];
-      return normalizeCorners(raw);
-    }
-
-    function loadCorners() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return defaultCorners();
-        const arr = JSON.parse(raw);
-        if (!Array.isArray(arr) || arr.length !== 4) return defaultCorners();
-
-        const corners = normalizeCorners(arr.map(p => L.latLng(p.lat, p.lng)));
-        if (cornersLookCrazy(corners)) {
-          localStorage.removeItem(STORAGE_KEY);
-          return defaultCorners();
-        }
-        return corners;
-      } catch {
-        return defaultCorners();
-      }
-    }
-
-    function saveCorners(corners) {
-      const norm = normalizeCorners(corners);
-      const arr = norm.map(c => ({ lat: c.lat, lng: c.lng }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
-    }
+    // ✅ Bounds más anchos (ajuste inicial recomendado)
+    // Si aún no encaja perfecto, ajustamos estos 4 números.
+    const radarBounds = L.latLngBounds(
+      [35.55, -3.90],  // SW (lat, lon)
+      [40.45,  1.52]   // NE (lat, lon)
+    );
 
     // === MAPA BASE ===
     const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
@@ -166,26 +85,14 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // === UI ===
+    // === OVERLAY RADAR ===
+    let radarOverlay = null;
+
     function setStatus(msg) {
       document.getElementById("status").textContent = msg;
     }
 
-    let calibrating = false;
-    function setCalibState(on) {
-      calibrating = on;
-      const el = document.getElementById("calibState");
-      el.textContent = `Calibración: ${on ? "ON" : "OFF"}`;
-      el.classList.toggle("on", on);
-      el.classList.toggle("off", !on);
-
-      if (radarOverlay) {
-        if (on) radarOverlay.editing.enable();
-        else radarOverlay.editing.disable();
-      }
-    }
-
-    // === FILTRO (tu mismo filtro) ===
+    // ✅ Filtro para hacer transparente el fondo negro/gris y dejar solo ecos
     function makeFilteredDataUrl(img) {
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
@@ -200,11 +107,18 @@
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2];
 
+        // Fondo del radar: negro/casi negro
         const isDark = (r < 35 && g < 35 && b < 35);
+
+        // Grises (bordes/zonas fuera del círculo): tonos parecidos y no muy claros
         const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
+
+        // También eliminamos casi-blancos (a veces hay cajas claras)
         const isAlmostWhite = (r > 245 && g > 245 && b > 245);
 
-        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
+        if (isDark || isGray || isAlmostWhite) {
+          d[i + 3] = 0; // transparente
+        }
       }
 
       ctx.putImageData(imgData, 0, 0);
@@ -214,18 +128,20 @@
     async function fetchImageToDataUrl(url) {
       return await new Promise((resolve, reject) => {
         const img = new Image();
-        img.crossOrigin = "anonymous";
+        img.crossOrigin = "anonymous"; // necesario para leer píxeles (si CORS lo permite)
+
         img.onload = () => {
-          try { resolve(makeFilteredDataUrl(img)); }
-          catch (e) { reject(e); }
+          try {
+            resolve(makeFilteredDataUrl(img));
+          } catch (e) {
+            reject(e);
+          }
         };
         img.onerror = reject;
+
         img.src = url;
       });
     }
-
-    // === OVERLAY RADAR (WARP) ===
-    let radarOverlay = null;
 
     async function cargarRadar() {
       setStatus("Cargando radar…");
@@ -238,60 +154,40 @@
           return;
         }
 
-        // Anti-caché seguro
+        // Anti-caché
         const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
 
-        let overlayUrl;
+        // Intentamos filtrar la imagen para dejar solo precipitación
+        let overlayUrl = null;
         try {
           overlayUrl = await fetchImageToDataUrl(rawUrl);
-          setStatus("OK (filtrado)");
         } catch (e) {
-          overlayUrl = rawUrl;
+          // Si falla por CORS, avisamos claramente
           setStatus("OK (sin filtro: CORS)");
+          overlayUrl = rawUrl; // fallback sin filtro
         }
 
         if (!radarOverlay) {
-          radarOverlay = L.distortableImageOverlay(overlayUrl, {
-            corners: loadCorners(),
-            opacity: 1.0,
-            interactive: true
-          }).addTo(map);
-
-          // Guardar SOLO cuando calibras (evita guardar "basura")
-          radarOverlay.on("update", () => {
-            if (calibrating) saveCorners(radarOverlay.getCorners());
-          });
-
-          radarOverlay.editing.disable();
+          radarOverlay = L.imageOverlay(overlayUrl, radarBounds, { opacity: 1.0 });
+          radarOverlay.addTo(map);
         } else {
           radarOverlay.setUrl(overlayUrl);
         }
 
+        // Si llegó aquí sin fallback:
+        if (overlayUrl !== rawUrl) setStatus("OK (filtrado)");
       } catch (e) {
-        console.error(e);
-        setStatus(`Error: ${e?.message || "conexión"}`);
+        setStatus("Error de conexión");
       }
     }
 
-    // === BOTONES ===
     document.getElementById("refresh").addEventListener("click", cargarRadar);
-
-    document.getElementById("toggleCalib").addEventListener("click", () => {
-      setCalibState(!calibrating);
-    });
-
-    document.getElementById("resetCorners").addEventListener("click", () => {
-      localStorage.removeItem(STORAGE_KEY);
-      if (radarOverlay) {
-        radarOverlay.setCorners(defaultCorners());
-        saveCorners(radarOverlay.getCorners());
-      }
-      setStatus("Ajuste reseteado");
-    });
 
     // Primera carga
     cargarRadar();
-    setCalibState(false);
+
+    // Opcional: refresco automático cada 10 min
+    // setInterval(cargarRadar, 10 * 60 * 1000);
   </script>
 </body>
 </html>
