@@ -3,215 +3,164 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Radar AEMET (Murcia) - Leaflet</title>
+  <title>Radar AEMET (Murcia) - Calibración bounds</title>
 
-  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
-  <!-- ✅ DistortableImage CSS (para mover/estirar el overlay a mano) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage@0.19.2/dist/leaflet.distortableimage.css" />
-
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
 
-    .panel {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 1000;
-      background: rgba(15, 22, 32, 0.9);
-      color: #e6edf3;
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      font-size: 13px;
-      display: grid;
-      gap: 8px;
-      min-width: 260px;
-      max-width: 420px;
+    .panel{
+      position:absolute; top:12px; left:12px; z-index:1000;
+      background:rgba(15,22,32,.9); color:#e6edf3;
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:12px; padding:10px 12px;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      font-size:13px; display:grid; gap:8px; min-width:280px; max-width:420px;
     }
-    .panel b { font-size: 14px; }
-    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-    button {
-      background: #17202b;
-      color: #e6edf3;
-      border: 1px solid #263445;
-      border-radius: 10px;
-      padding: 8px 10px;
-      cursor: pointer;
-      white-space: nowrap;
+    .row{ display:flex; gap:8px; align-items:center; justify-content:space-between; }
+    button{
+      background:#17202b; color:#e6edf3; border:1px solid #263445;
+      border-radius:10px; padding:8px 10px; cursor:pointer; white-space:nowrap;
     }
-    button:hover { background: #1b2633; }
-    .muted { color: #9fb0c0; }
-    code { color: #cfe7ff; }
-    .tiny { font-size: 12px; color: #9fb0c0; line-height: 1.35; }
+    button:hover{ background:#1b2633; }
+    .muted{ color:#9fb0c0; }
+    code{ color:#cfe7ff; }
+    .tiny{ font-size:12px; color:#9fb0c0; line-height:1.35; }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
   <div class="panel">
-    <b style="color:lime">LEAFLET ACTIVO ✅</b>
+    <b style="color:lime">CALIBRACIÓN ✅</b>
     <div class="row">
       <span id="status" class="muted">Cargando…</span>
       <button id="refresh">Actualizar</button>
     </div>
-    <div class="muted" id="hint">
-      Modo calibración: mueve/estira el radar y copia los <code>bounds</code>.
+
+    <div class="tiny">
+      Arrastra los marcadores <b>SW</b> y <b>NE</b> para mover/estirar el radar.<br/>
+      Copia estos bounds:
     </div>
 
     <div class="tiny" id="debug">
-      Bounds SW: <code>—</code><br/>
-      Bounds NE: <code>—</code><br/>
-      Tip: clic en el radar → arrastra / estira esquinas. (Luego copia los valores)
+      SW: <code>—</code><br/>
+      NE: <code>—</code>
     </div>
   </div>
 
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-  <!-- ✅ DistortableImage JS -->
-  <script src="https://unpkg.com/leaflet-distortableimage@0.19.2/dist/leaflet.distortableimage.js"></script>
-
   <script>
-    // === CONFIG ===
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
 
-    // ✅ Bounds iniciales (sirven de punto de partida)
-    const START_BOUNDS = L.latLngBounds(
-      [35.50, -3.95], // SW
-      [40.40,  1.60]  // NE
-    );
+    // Bounds iniciales (punto de partida)
+    let SW = [35.50, -3.95];
+    let NE = [40.40,  1.60];
 
-    // === MAPA BASE ===
-    const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
-
+    const map = L.map("map").setView([37.9, -1.2], 8);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap'
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // === OVERLAY RADAR (distortable) ===
-    let radarOverlay = null;
+    let overlay = null;
+    let rect = null;
+    let mSW = null;
+    let mNE = null;
 
-    function setStatus(msg) {
-      document.getElementById("status").textContent = msg;
-    }
+    function setStatus(msg){ document.getElementById("status").textContent = msg; }
 
-    function setBoundsDebug(bounds) {
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-
-      const swTxt = `[${sw.lat.toFixed(5)}, ${sw.lng.toFixed(5)}]`;
-      const neTxt = `[${ne.lat.toFixed(5)}, ${ne.lng.toFixed(5)}]`;
-
+    function updateDebug() {
       document.getElementById("debug").innerHTML =
-        `Bounds SW: <code>${swTxt}</code><br/>` +
-        `Bounds NE: <code>${neTxt}</code><br/>` +
-        `Tip: ajusta a mano y copia estos dos pares para tu <code>L.latLngBounds(SW, NE)</code>.`;
-
-      console.log("✅ BOUNDS FINALES (cópialos):");
-      console.log("SW:", swTxt);
-      console.log("NE:", neTxt);
+        `SW: <code>[${SW[0].toFixed(5)}, ${SW[1].toFixed(5)}]</code><br/>` +
+        `NE: <code>[${NE[0].toFixed(5)}, ${NE[1].toFixed(5)}]</code>`;
+      console.log("BOUNDS:", { SW, NE });
     }
 
-    // ✅ Filtro para hacer transparente el fondo negro/gris y dejar solo ecos
-    function makeFilteredDataUrl(img) {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+    function applyBounds() {
+      const bounds = L.latLngBounds(SW, NE);
+      if (overlay) overlay.setBounds(bounds);
+      if (rect) rect.setBounds(bounds);
+      updateDebug();
+    }
 
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0);
+    function ensureHandles() {
+      const bounds = L.latLngBounds(SW, NE);
 
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d = imgData.data;
-
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-
-        const isDark = (r < 35 && g < 35 && b < 35);
-        const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
-        const isAlmostWhite = (r > 245 && g > 245 && b > 245);
-
-        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
+      if (!rect) {
+        rect = L.rectangle(bounds, { weight: 1, color: "#00e5ff", fillOpacity: 0.05 }).addTo(map);
       }
 
-      ctx.putImageData(imgData, 0, 0);
-      return canvas.toDataURL("image/png");
-    }
+      if (!mSW) {
+        mSW = L.marker(SW, { draggable: true }).addTo(map).bindTooltip("SW", {permanent:true, direction:"right"});
+        mSW.on("drag", (e) => {
+          const ll = e.target.getLatLng();
+          SW = [ll.lat, ll.lng];
+          // evita invertir bounds
+          if (SW[0] > NE[0]) SW[0] = NE[0] - 0.01;
+          if (SW[1] > NE[1]) SW[1] = NE[1] - 0.01;
+          applyBounds();
+        });
+      } else {
+        mSW.setLatLng(SW);
+      }
 
-    async function fetchImageToDataUrl(url) {
-      return await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-          try { resolve(makeFilteredDataUrl(img)); }
-          catch (e) { reject(e); }
-        };
-        img.onerror = reject;
-        img.src = url;
-      });
+      if (!mNE) {
+        mNE = L.marker(NE, { draggable: true }).addTo(map).bindTooltip("NE", {permanent:true, direction:"right"});
+        mNE.on("drag", (e) => {
+          const ll = e.target.getLatLng();
+          NE = [ll.lat, ll.lng];
+          if (NE[0] < SW[0]) NE[0] = SW[0] + 0.01;
+          if (NE[1] < SW[1]) NE[1] = SW[1] + 0.01;
+          applyBounds();
+        });
+      } else {
+        mNE.setLatLng(NE);
+      }
+
+      applyBounds();
     }
 
     async function cargarRadar() {
       setStatus("Cargando radar…");
       try {
-        const r = await fetch(`${PROXY}/radar?radar=${encodeURIComponent(RADAR)}`);
-        const j = await r.json();
+        const url = `${PROXY}/radar?radar=${encodeURIComponent(RADAR)}`;
+        const r = await fetch(url, { headers: { "accept": "application/json" } });
+        const txt = await r.text();
+
+        let j;
+        try { j = JSON.parse(txt); }
+        catch {
+          setStatus(`HTTP ${r.status} (no JSON)`);
+          console.log("RESPUESTA CRUDA:", txt);
+          return;
+        }
 
         if (j.estado !== 200 || !j.datos) {
           setStatus(`Error AEMET: ${j.estado} ${j.descripcion || ""}`.trim());
           return;
         }
 
-        const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
+        const imgUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
 
-        let overlayUrl = null;
-        try {
-          overlayUrl = await fetchImageToDataUrl(rawUrl);
-        } catch (e) {
-          // Si falla por CORS, usamos la imagen tal cual
-          overlayUrl = rawUrl;
-          setStatus("OK (sin filtro: CORS)");
-        }
-
-        if (!radarOverlay) {
-          // ✅ Creamos el overlay "editable"
-          radarOverlay = L.distortableImageOverlay(overlayUrl, {
-            selected: true,
-            suppressToolbar: false,  // muestra toolbar
-            cornerIcon: true
-          }).addTo(map);
-
-          // aplicamos bounds iniciales
-          radarOverlay.setBounds(START_BOUNDS);
-          setBoundsDebug(START_BOUNDS);
-
-          // ✅ cada vez que lo mueves/estiras, te damos los bounds
-          radarOverlay.on("update", () => {
-            const b = radarOverlay.getBounds();
-            setBoundsDebug(b);
-          });
-
+        if (!overlay) {
+          overlay = L.imageOverlay(imgUrl, L.latLngBounds(SW, NE), { opacity: 0.9 }).addTo(map);
+          ensureHandles();
           setStatus("OK (calibrando)");
         } else {
-          // refrescar la imagen manteniendo la posición/forma
-          radarOverlay.setUrl(overlayUrl);
+          overlay.setUrl(imgUrl);
           setStatus("OK (actualizado)");
         }
       } catch (e) {
-        setStatus("Error de conexión");
+        console.error("ERROR:", e);
+        setStatus("Error JS: " + (e?.message || e));
       }
     }
 
     document.getElementById("refresh").addEventListener("click", cargarRadar);
-
-    // Primera carga
     cargarRadar();
   </script>
 </body>
 </html>
+
