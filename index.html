@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Radar AEMET (Murcia) - Leaflet</title>
+  <title>Radar AEMET (Murcia) - Leaflet (Opción A estable)</title>
 
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
-  <!-- DistortableImage -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.css" />
+  <!-- Leaflet Toolbar (DEPENDENCIA de DistortableImage) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-toolbar@0.4.0-alpha.2/dist/leaflet.toolbar.css"/>
+
+  <!-- DistortableImage CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-distortableimage@0.21.9/dist/leaflet.distortableimage.css"/>
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -21,123 +23,264 @@
       top: 12px;
       left: 12px;
       z-index: 1000;
-      background: rgba(15,22,32,0.9);
+      background: rgba(15, 22, 32, 0.9);
       color: #e6edf3;
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: 12px;
       padding: 10px 12px;
-      font-family: system-ui, Arial;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
       font-size: 13px;
       display: grid;
       gap: 8px;
-      min-width: 260px;
+      min-width: 320px;
+      max-width: 440px;
     }
-
+    .panel b { font-size: 14px; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
     button {
       background: #17202b;
       color: #e6edf3;
       border: 1px solid #263445;
-      border-radius: 8px;
-      padding: 6px 10px;
+      border-radius: 10px;
+      padding: 8px 10px;
       cursor: pointer;
+      white-space: nowrap;
     }
+    button:hover { background: #1b2633; }
+    .muted { color: #9fb0c0; }
+    code { color: #cfe7ff; }
+    .pill {
+      padding: 4px 8px;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    .pill.on { color: #7CFF8A; border-color: rgba(124,255,138,0.35); }
+    .pill.off { color: #ffcc66; border-color: rgba(255,204,102,0.35); }
   </style>
 </head>
+
 <body>
-<div id="map"></div>
+  <div id="map"></div>
 
-<div class="panel">
-  <b style="color:lime">RADAR AEMET · AJUSTE ESTABLE</b>
-  <span id="status">Cargando…</span>
-  <button id="refresh">Actualizar radar</button>
-  <button id="calibrate">Activar / Desactivar ajuste</button>
-</div>
+  <div class="panel">
+    <b style="color:lime">RADAR AEMET · Opción A (estable) ✅</b>
 
-<!-- JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-toolbar/dist/leaflet.toolbar.js"></script>
-<script src="https://unpkg.com/leaflet-distortableimage/dist/leaflet.distortableimage.js"></script>
+    <div class="row">
+      <span id="status" class="muted">Cargando…</span>
+      <span id="calibState" class="pill off">Calibración: OFF</span>
+    </div>
 
-<script>
-  const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
-  const RADAR = "mu";
-  const STORAGE_KEY = "radar_mu_corners";
+    <div class="row">
+      <button id="refresh">Actualizar</button>
+      <button id="toggleCalib">Calibrar (ON/OFF)</button>
+      <button id="resetCorners">Reset ajuste</button>
+    </div>
 
-  const map = L.map("map").setView([37.9, -1.2], 8);
+    <div class="muted">
+      Ajuste fino: activa <code>Calibrar</code>, luego <b>haz click sobre la imagen</b> para ver tiradores,
+      y ajusta con <b>mover/escalar/rotar</b> (sin deformar).
+      Se guarda en tu navegador.
+    </div>
+  </div>
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19
-  }).addTo(map);
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  let radarOverlay = null;
-  let editing = false;
+  <!-- Leaflet Toolbar JS (antes que DistortableImage) -->
+  <script src="https://unpkg.com/leaflet-toolbar@0.4.0-alpha.2/dist/leaflet.toolbar.js"></script>
 
-  function setStatus(t) {
-    document.getElementById("status").textContent = t;
-  }
+  <!-- DistortableImage JS -->
+  <script src="https://unpkg.com/leaflet-distortableimage@0.21.9/dist/leaflet.distortableimage.js"></script>
 
-  // Esquinas iniciales (aprox)
-  function defaultCorners() {
-    return [
-      L.latLng(40.2, -3.8), // NW
-      L.latLng(40.2,  1.3), // NE
-      L.latLng(35.7,  1.3), // SE
-      L.latLng(35.7, -3.8)  // SW
-    ];
-  }
+  <script>
+    // === CONFIG ===
+    const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
+    const RADAR = "mu";
+    const STORAGE_KEY = `radarCorners_${RADAR}_stable_v1`;
 
-  function loadCorners() {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultCorners();
-    return JSON.parse(raw).map(p => L.latLng(p.lat, p.lng));
-  }
+    // === MAPA BASE ===
+    const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
 
-  function saveCorners() {
-    const c = radarOverlay.getCorners().map(p => ({lat:p.lat, lng:p.lng}));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(c));
-  }
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
 
-  async function fetchRadar() {
-    setStatus("Cargando radar…");
-
-    const r = await fetch(`${PROXY}/radar?radar=${RADAR}`);
-    const j = await r.json();
-    if (j.estado !== 200) {
-      setStatus("Error AEMET");
-      return;
+    // === UI ===
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
     }
 
-    const url = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
+    let calibrating = false;
+    function setCalibState(on) {
+      calibrating = on;
+      const el = document.getElementById("calibState");
+      el.textContent = `Calibración: ${on ? "ON" : "OFF"}`;
+      el.classList.toggle("on", on);
+      el.classList.toggle("off", !on);
 
-    if (!radarOverlay) {
-      radarOverlay = L.distortableImageOverlay(url, {
-        corners: loadCorners(),
-        opacity: 0.95,
-        actions: [
-          L.DistortableImage.action.Drag,
-          L.DistortableImage.action.Scale,
-          L.DistortableImage.action.Rotate
-        ]
-      }).addTo(map);
-
-      radarOverlay.on("update", saveCorners);
-      radarOverlay.editing.disable();
-    } else {
-      radarOverlay.setUrl(url);
+      if (radarOverlay) {
+        if (on) radarOverlay.editing.enable();
+        else radarOverlay.editing.disable();
+      }
     }
 
-    setStatus("Radar actualizado");
-  }
+    // === Esquinas iniciales (centradas en SE peninsular, para que NO “se vaya”) ===
+    function defaultCorners() {
+      // Orden: NW, NE, SE, SW
+      return [
+        L.latLng(39.85, -2.90), // NW
+        L.latLng(39.85,  0.80), // NE
+        L.latLng(36.10,  0.80), // SE
+        L.latLng(36.10, -2.90)  // SW
+      ];
+    }
 
-  document.getElementById("refresh").onclick = fetchRadar;
+    function loadCorners() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return defaultCorners();
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr) || arr.length !== 4) return defaultCorners();
+        return arr.map(p => L.latLng(p.lat, p.lng));
+      } catch {
+        return defaultCorners();
+      }
+    }
 
-  document.getElementById("calibrate").onclick = () => {
-    editing = !editing;
-    if (editing) radarOverlay.editing.enable();
-    else radarOverlay.editing.disable();
-  };
+    function saveCorners(corners) {
+      const arr = corners.map(c => ({ lat: c.lat, lng: c.lng }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+    }
 
-  fetchRadar();
-</script>
+    function fitToCorners(corners) {
+      map.fitBounds(L.latLngBounds(corners).pad(0.15));
+    }
+
+    // === FILTRO (tu mismo filtro) ===
+    function makeFilteredDataUrl(img) {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const isDark = (r < 35 && g < 35 && b < 35);
+        const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
+        const isAlmostWhite = (r > 245 && g > 245 && b > 245);
+        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+      return canvas.toDataURL("image/png");
+    }
+
+    async function fetchImageToDataUrl(url) {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          try { resolve(makeFilteredDataUrl(img)); }
+          catch (e) { reject(e); }
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    // === OVERLAY RADAR ===
+    let radarOverlay = null;
+
+    async function cargarRadar() {
+      setStatus("Cargando radar…");
+      try {
+        const r = await fetch(`${PROXY}/radar?radar=${encodeURIComponent(RADAR)}`);
+        const j = await r.json();
+
+        if (j.estado !== 200 || !j.datos) {
+          setStatus(`Error AEMET: ${j.estado} ${j.descripcion || ""}`.trim());
+          return;
+        }
+
+        const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
+
+        // 1) Siempre crear/actualizar con URL RAW primero (para que SE VEA sí o sí)
+        if (!radarOverlay) {
+          const corners = loadCorners();
+
+          // Nota: este plugin cuelga de L.distortableImageOverlay (minúscula d)
+          if (!L.distortableImageOverlay) {
+            console.error("DistortableImage no cargado. Revisa CDNs.");
+            setStatus("Error: plugin no cargado");
+            return;
+          }
+
+          radarOverlay = L.distortableImageOverlay(rawUrl, {
+            corners,
+            opacity: 0.95,
+            // IMPORTANTE: solo acciones estables (sin Distort)
+            actions: [
+              L.DistortableImage.action.Drag,
+              L.DistortableImage.action.Scale,
+              L.DistortableImage.action.Rotate
+            ],
+            interactive: true
+          }).addTo(map);
+
+          radarOverlay.on("update", () => saveCorners(radarOverlay.getCorners()));
+
+          radarOverlay.editing.disable();
+          fitToCorners(corners);
+        } else {
+          radarOverlay.setUrl(rawUrl);
+        }
+
+        // 2) Intentar filtro (si CORS permite). Si falla, no pasa nada.
+        try {
+          const filteredUrl = await fetchImageToDataUrl(rawUrl);
+          radarOverlay.setUrl(filteredUrl);
+          setStatus("OK (filtrado)");
+        } catch (e) {
+          setStatus("OK (sin filtro: CORS)");
+        }
+
+      } catch (e) {
+        console.error(e);
+        setStatus("Error de conexión");
+      }
+    }
+
+    // Botones
+    document.getElementById("refresh").addEventListener("click", cargarRadar);
+
+    document.getElementById("toggleCalib").addEventListener("click", () => {
+      if (!radarOverlay) return;
+      setCalibState(!calibrating);
+      // Tip: para ver los tiradores, hay que hacer click sobre la imagen
+      setStatus(calibrating ? "Calibración ON (haz click en el radar)" : "Calibración OFF");
+    });
+
+    document.getElementById("resetCorners").addEventListener("click", () => {
+      localStorage.removeItem(STORAGE_KEY);
+      if (radarOverlay) {
+        const c = defaultCorners();
+        radarOverlay.setCorners(c);
+        saveCorners(c);
+        fitToCorners(c);
+      }
+      setStatus("Ajuste reseteado");
+    });
+
+    // Primera carga
+    cargarRadar();
+    setCalibState(false);
+  </script>
 </body>
 </html>
-
