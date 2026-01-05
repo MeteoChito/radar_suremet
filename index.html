@@ -6,10 +6,7 @@
   <title>Radar AEMET (Murcia) - Leaflet</title>
 
   <!-- Leaflet CSS -->
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -30,7 +27,7 @@
       display: grid;
       gap: 8px;
       min-width: 260px;
-      max-width: 360px;
+      max-width: 420px;
     }
     .panel b { font-size: 14px; }
     .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -52,30 +49,26 @@
   <div id="map"></div>
 
   <div class="panel">
-    <b style="color:lime">LEAFLET ACTIVO ✅</b>
+    <b style="color:lime">LEAFLET + AFIN ✅</b>
     <div class="row">
       <span id="status" class="muted">Cargando…</span>
       <button id="refresh">Actualizar</button>
     </div>
     <div class="muted" id="hint">
-      Overlay: <code>bounds</code> ajustados + filtro para dejar solo precipitación.
+      Opción 2A: georreferenciación <code>afín</code> (px→lat/lon) aplicada automáticamente a cada imagen.
     </div>
   </div>
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <!-- math.js (OBLIGATORIO para resolver la transformación afín) -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjs@11.8.0/lib/browser/math.min.js"></script>
+
   <script>
     // === CONFIG ===
     const PROXY = "https://aemet-proxy.javiermt-chito.workers.dev";
     const RADAR = "mu";
-
-    // ✅ Bounds más anchos (ajuste inicial recomendado)
-    // Si aún no encaja perfecto, ajustamos estos 4 números.
-    const radarBounds = L.latLngBounds(
-      [35.55, -3.90],  // SW (lat, lon)
-      [40.45,  1.52]   // NE (lat, lon)
-    );
 
     // === MAPA BASE ===
     const map = L.map("map", { zoomControl: true }).setView([37.9, -1.2], 8);
@@ -85,14 +78,82 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // === OVERLAY RADAR ===
     let radarOverlay = null;
 
     function setStatus(msg) {
       document.getElementById("status").textContent = msg;
     }
 
-    // ✅ Filtro para hacer transparente el fondo negro/gris y dejar solo ecos
+    // =========================================================
+    // ✅ Opción 2A: puntos de control (AJUSTA SOLO ESTO)
+    // ---------------------------------------------------------
+    // Formato: [pixelX, pixelY, lat, lon]
+    // NOTA: pixelX/pixelY dependen del PNG del radar (siempre mismo tamaño/encuadre).
+    // =========================================================
+    const controlPoints = [
+      [512, 760, 37.61, -0.99], // Murcia (aprox)
+      [640, 690, 38.35, -0.48], // Alicante (aprox)
+      [500, 620, 38.99, -1.85], // Albacete (aprox)
+      // Puedes añadir un 4º para estabilizar:
+      // [580, 540, 39.47, -0.38], // Valencia (aprox)
+    ];
+
+    // =========================================================
+    // Transformación afín:
+    // lat = a*x + b*y + c
+    // lon = d*x + e*y + f
+    // =========================================================
+    function computeAffine(points) {
+      if (points.length < 3) throw new Error("Necesitas al menos 3 puntos de control.");
+
+      const A = [];
+      const B = [];
+
+      for (const [x, y, lat, lon] of points) {
+        A.push([x, y, 1, 0, 0, 0]);
+        A.push([0, 0, 0, x, y, 1]);
+        B.push(lat);
+        B.push(lon);
+      }
+
+      const AT = math.transpose(A);
+      const ATA = math.multiply(AT, A);
+      const ATB = math.multiply(AT, B);
+      const X = math.multiply(math.inv(ATA), ATB); // [a,b,c,d,e,f]
+
+      return X;
+    }
+
+    // =========================================================
+    // Dibuja la imagen aplicando la transformación afín
+    // OJO: Canvas usa setTransform(a, b, c, d, e, f) donde:
+    // x' = a*x + c*y + e
+    // y' = b*x + d*y + f
+    //
+    // Nosotros tenemos:
+    // lat = a*x + b*y + c
+    // lon = d*x + e*y + f
+    // Lo mapeamos como:
+    // x' = lon, y' = lat
+    // =========================================================
+    function renderAffineCanvas(img, affine) {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      const ctx = canvas.getContext("2d");
+      const [a,b,c,d,e,f] = affine;
+
+      // x' (lon) = d*x + e*y + f  -> a=d, c=e, e=f
+      // y' (lat) = a*x + b*y + c  -> b=a, d=b, f=c
+      ctx.setTransform(d, a, e, b, f, c);
+      ctx.drawImage(img, 0, 0);
+      ctx.setTransform(1,0,0,1,0,0);
+
+      return canvas;
+    }
+
+    // === FILTRO (tu mismo filtro) ===
     function makeFilteredDataUrl(img) {
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
@@ -107,42 +168,30 @@
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2];
 
-        // Fondo del radar: negro/casi negro
         const isDark = (r < 35 && g < 35 && b < 35);
-
-        // Grises (bordes/zonas fuera del círculo): tonos parecidos y no muy claros
         const isGray = (Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r < 160);
-
-        // También eliminamos casi-blancos (a veces hay cajas claras)
         const isAlmostWhite = (r > 245 && g > 245 && b > 245);
 
-        if (isDark || isGray || isAlmostWhite) {
-          d[i + 3] = 0; // transparente
-        }
+        if (isDark || isGray || isAlmostWhite) d[i + 3] = 0;
       }
 
       ctx.putImageData(imgData, 0, 0);
       return canvas.toDataURL("image/png");
     }
 
-    async function fetchImageToDataUrl(url) {
-      return await new Promise((resolve, reject) => {
+    function fetchImage(url) {
+      return new Promise((resolve, reject) => {
         const img = new Image();
-        img.crossOrigin = "anonymous"; // necesario para leer píxeles (si CORS lo permite)
-
-        img.onload = () => {
-          try {
-            resolve(makeFilteredDataUrl(img));
-          } catch (e) {
-            reject(e);
-          }
-        };
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
         img.onerror = reject;
-
         img.src = url;
       });
     }
 
+    // =========================================================
+    // CARGA RADAR (AUTOMÁTICO)
+    // =========================================================
     async function cargarRadar() {
       setStatus("Cargando radar…");
       try {
@@ -154,40 +203,47 @@
           return;
         }
 
-        // Anti-caché
         const rawUrl = j.datos + (j.datos.includes("?") ? "&" : "?") + "t=" + Date.now();
 
-        // Intentamos filtrar la imagen para dejar solo precipitación
-        let overlayUrl = null;
+        // Descarga imagen original
+        const img = await fetchImage(rawUrl);
+
+        // Filtrado (puede fallar por CORS)
+        let filteredImg = img;
         try {
-          overlayUrl = await fetchImageToDataUrl(rawUrl);
+          const filteredUrl = makeFilteredDataUrl(img);
+          filteredImg = await fetchImage(filteredUrl);
         } catch (e) {
-          // Si falla por CORS, avisamos claramente
           setStatus("OK (sin filtro: CORS)");
-          overlayUrl = rawUrl; // fallback sin filtro
         }
+
+        // Calcular afín
+        const affine = computeAffine(controlPoints);
+        console.log("Affine:", affine); // ✅ para depurar
+
+        // Render afín en canvas
+        const canvas = renderAffineCanvas(filteredImg, affine);
+        const dataUrl = canvas.toDataURL("image/png");
+
+        // Bounds amplios como “contenedor” (no es el ajuste)
+        const bounds = L.latLngBounds([35.0, -4.5], [41.0, 2.0]);
 
         if (!radarOverlay) {
-          radarOverlay = L.imageOverlay(overlayUrl, radarBounds, { opacity: 1.0 });
+          radarOverlay = L.imageOverlay(dataUrl, bounds, { opacity: 1.0 });
           radarOverlay.addTo(map);
         } else {
-          radarOverlay.setUrl(overlayUrl);
+          radarOverlay.setUrl(dataUrl);
         }
 
-        // Si llegó aquí sin fallback:
-        if (overlayUrl !== rawUrl) setStatus("OK (filtrado)");
+        setStatus("OK (afín)");
       } catch (e) {
-        setStatus("Error de conexión");
+        console.error(e);
+        setStatus(`Error: ${e?.message || "conexión"}`);
       }
     }
 
     document.getElementById("refresh").addEventListener("click", cargarRadar);
-
-    // Primera carga
     cargarRadar();
-
-    // Opcional: refresco automático cada 10 min
-    // setInterval(cargarRadar, 10 * 60 * 1000);
   </script>
 </body>
 </html>
